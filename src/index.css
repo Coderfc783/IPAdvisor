@@ -1,0 +1,43 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Frosted Glass Palette */
+  --color-brand-primary: #6366f1; /* Indigo 500 */
+  --color-brand-secondary: #10b981; /* Emerald 500 */
+  
+  --color-surface-base: #0c0e14;
+  --color-surface-glass: rgba(255, 255, 255, 0.05);
+  --color-surface-border: rgba(255, 255, 255, 0.1);
+  
+  --color-text-primary: #f1f5f9; /* Slate 100 */
+  --color-text-secondary: #94a3b8; /* Slate 400 */
+  --color-text-muted: #64748b; /* Slate 500 */
+}
+
+@layer base {
+  body {
+    @apply bg-surface-base text-text-primary font-sans antialiased overflow-x-hidden;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-surface-glass border border-surface-border backdrop-blur-xl rounded-3xl shadow-2xl;
+  }
+  
+  .glass-input {
+    @apply bg-black/30 border border-surface-border rounded-xl px-4 py-3 text-text-primary focus:outline-none focus:border-brand-primary/50 transition-colors;
+  }
+
+  .mesh-gradient-1 {
+    @apply absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-indigo-600/20 rounded-full blur-[120px] pointer-events-none;
+  }
+
+  .mesh-gradient-2 {
+    @apply absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] bg-emerald-600/10 rounded-full blur-[150px] pointer-events-none;
+  }
+}
