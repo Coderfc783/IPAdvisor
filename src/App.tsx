@@ -22,7 +22,11 @@ import {
   Line,
   Legend,
   ReferenceLine,
-  Label
+  Label,
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip as ChartTooltip
 } from 'recharts';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -135,10 +139,12 @@ function WealthApp() {
   async function refreshMarketData() {
     setIsUpdatingMarket(true);
     try {
-      // Step 1: Try to load from Firestore Cache first to be fast if it's fresh (optional logic)
-      // For now, we always fetch Gemini for "Live" accuracy as requested, but we'll save the result.
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("GEMINI_API_KEY is not defined in the environment.");
+      }
 
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const prompt = `
         Perform a comprehensive market audit for April 2026. 
         Fetch specific current yields or trailing 12-month returns for these categories:
@@ -168,8 +174,8 @@ function WealthApp() {
       `;
       
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
+        model: "gemini-1.5-flash-latest",
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -193,7 +199,7 @@ function WealthApp() {
             },
             required: ["data"]
           },
-          tools: [{ googleSearch: {} }] // Using real-time grounding
+          tools: [{ googleSearch: {} }] as any
         }
       });
 
@@ -786,8 +792,50 @@ function WealthApp() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="overflow-hidden border border-white/5 rounded-xl bg-white/[0.02]">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="h-[200px] flex flex-col items-center justify-center relative">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={portfolioStrategy.allocations}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="pct"
+                        animationDuration={1000}
+                      >
+                        {portfolioStrategy.allocations.map((entry, index) => (
+                          <Cell 
+                            key={`cell-${index}`} 
+                            fill={assetClasses.find(a => a.name === entry.name)?.color || '#6366f1'} 
+                            stroke="rgba(255,255,255,0.1)"
+                          />
+                        ))}
+                      </Pie>
+                      <ChartTooltip 
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length) {
+                            return (
+                              <div className="bg-slate-900/90 backdrop-blur-md border border-white/10 px-3 py-2 rounded-lg shadow-xl text-[10px]">
+                                <p className="font-bold text-white mb-1 uppercase tracking-widest">{payload[0].name}</p>
+                                <p className="text-brand-secondary font-mono">{payload[0].value}% Allocation</p>
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Hybrid</span>
+                    <span className="text-sm font-black text-white">Target</span>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden border border-white/5 rounded-xl bg-white/[0.02] md:col-span-1">
                    <table className="w-full text-left">
                     <thead>
                       <tr className="bg-white/5 text-[9px] text-text-secondary uppercase tracking-widest font-bold">
@@ -855,15 +903,26 @@ function WealthApp() {
         </div>
       </main>
 
-      <footer className="mt-8 flex justify-between items-center text-[10px] text-text-muted uppercase tracking-[0.2em] relative z-10">
-        <p>© 2024 Quantum Finance Simulations</p>
-        <div className="flex gap-4 items-center">
-          <div className="flex items-center gap-1 text-brand-secondary">
-             <ShieldCheck size={12} />
-             <span>{user ? 'Cloud Protected' : 'Local Guard Active'}</span>
+      <footer className="mt-8 relative z-10">
+        <div className="p-4 rounded-xl bg-white/5 border border-white/10 mb-6">
+          <p className="text-[9px] uppercase tracking-widest font-black text-rose-400 mb-2 flex items-center gap-2">
+            <AlertTriangle size={12} /> Compliance & Risk Disclaimer
+          </p>
+          <p className="text-[10px] text-text-muted leading-relaxed">
+            The values projected by the Investment and Portfolio Predictor are simulated using current April 2026 ground-level market data via Gemini 3 AI. Historical performance is not indicative of future results. All allocations are algorithmic suggestions based on your risk profile and inflation inputs. Consult with a SEBI-registered (or local equivalent) financial advisor before making actual capital commitments. This tool does not constitute financial advice.
+          </p>
+        </div>
+
+        <div className="flex justify-between items-center text-[10px] text-text-muted uppercase tracking-[0.2em]">
+          <p>© 2024 Quantum Finance Simulations</p>
+          <div className="flex gap-4 items-center">
+            <div className="flex items-center gap-1 text-brand-secondary">
+               <ShieldCheck size={12} />
+               <span>{user ? 'Cloud Sync Active' : 'Local Persistence Only'}</span>
+            </div>
+            <p className="opacity-40">|</p>
+            <p>Infrastructure: Enterprise Cloud Container</p>
           </div>
-          <p className="opacity-40">|</p>
-          <p>Engine: Gemini 3 Advanced Feed</p>
         </div>
       </footer>
     </div>
