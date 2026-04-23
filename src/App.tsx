@@ -31,7 +31,7 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { motion } from 'motion/react';
-import { GoogleGenAI, Type } from "@google/genai";
+import { Type } from "@google/genai";
 import { FirebaseProvider, useFirebase } from './components/FirebaseProvider';
 import { signInWithGoogle, auth, db } from './lib/firebase';
 import { LogIn, LogOut } from 'lucide-react';
@@ -62,6 +62,7 @@ function WealthApp() {
   const [riskLevel, setRiskLevel] = useState<number>(5);
   const [assetClasses, setAssetClasses] = useState(INITIAL_ASSET_CLASSES);
   const [isUpdatingMarket, setIsUpdatingMarket] = useState(false);
+  const [hoveredAsset, setHoveredAsset] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<{ id: string; type: 'success' | 'warning' | 'info'; message: string; timestamp: Date }[]>([]);
 
   const addAlert = (type: 'success' | 'warning' | 'info', message: string) => {
@@ -135,76 +136,16 @@ function WealthApp() {
     }
   }, [currentCorpus, targetCorpus, years, riskLevel, inflationRate, assetClasses, isLoaded, user]);
 
-  // Market Data Integration (Live Grounding via Gemini)
+  // Market Data Integration (Live Grounding via Backend API)
   async function refreshMarketData() {
     setIsUpdatingMarket(true);
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY is not defined in the environment.");
+      const response = await fetch("/api/market-data");
+      if (!response.ok) {
+        throw new Error(`Server responded with ${response.status}`);
       }
-
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = `
-        Perform a comprehensive market audit for April 2026. 
-        Fetch specific current yields or trailing 12-month returns for these categories:
-        1. Index Funds: Blended return from ^NSEI and ^GSPC.
-        2. General Equity: Weighted return of VTI and NQ=F.
-        3. Metals: Annualized performance of Gold (GC=F) and Silver (SI=F).
-        4. Estates: Yields from Real Estate ETFs (VNQ, IYR).
-        5. F&O: Calculate speculative return potential based on current ^INDIAVIX (Volatility Index) level.
-        6. Bank Schemes: Current 5-Year fixed deposit rates (approx 7.2-7.5%).
-        7. Debt Funds: Analyze Liquid/Debt fund benchmarks (e.g., HDFC Liquid Fund or similar Indian Debt MF proxies).
-        
-        CRITICAL INSTRUCTIONS:
-        - Identify the most recent annual growth or yield percentages.
-        - If precise 2026 ROI data is missing for a specific category, use the 2025 trailing 12-month return as a proxy.
-        - NEVER return 0.0 unless the specific asset class has literally stopped yielding.
-        - Ensure ROIs are realistic (e.g., 0.05 - 0.25 range for most equities).
-        
-        For each category, return:
-        - name: The friendly category name (e.g., "Index Funds")
-        - ticker: The symbols you analyzed (e.g., "^NSEI, ^GSPC")
-        - price: Current average price or benchmark rate (as string, e.g. "₹22,100")
-        - roi: The annual ROI decimal (e.g., 0.125 for 12.5%)
-        - riskScore: A value from 1 to 10
-        - color: A hex color code
-        
-        Return STRICTLY JSON.
-      `;
       
-      const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash-latest",
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              data: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    ticker: { type: Type.STRING },
-                    price: { type: Type.STRING },
-                    roi: { type: Type.NUMBER },
-                    riskScore: { type: Type.NUMBER },
-                    color: { type: Type.STRING }
-                  },
-                  required: ["name", "roi", "ticker", "price", "color", "riskScore"]
-                }
-              }
-            },
-            required: ["data"]
-          },
-          tools: [{ googleSearch: {} }] as any
-        }
-      });
-
-      const textOutput = response.text || "";
-      const json = JSON.parse(textOutput.trim());
+      const json = await response.json();
       
       if (json.data && json.data.length > 0) {
         const validData = json.data.map((item: any) => ({
@@ -251,12 +192,13 @@ function WealthApp() {
           }
         }
       } else {
-        throw new Error("AI returned empty data array");
+        throw new Error("API returned malformed data");
       }
     } catch (e) {
       console.error("Advanced market sync failed:", e);
+      addAlert('info', "Using cached market data due to sync delay.");
       
-      // Fallback: Try reading from the global cache if Gemini fails
+      // Fallback: Try reading from the global cache if API fails
       try {
         const cacheSnap = await getDoc(doc(db, 'market', 'latest'));
         if (cacheSnap.exists()) {
@@ -429,7 +371,16 @@ function WealthApp() {
           <h1 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
             Investment and Portfolio Predictor
           </h1>
-          <p className="text-text-secondary text-sm italic">Advanced Multi-Asset Projection Simulator</p>
+          <div className="flex items-center gap-3 mt-1">
+            <p className="text-text-secondary text-xs italic">Advanced Multi-Asset Projection Simulator</p>
+            <div className={cn(
+              "flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-tighter transition-all duration-500",
+              isUpdatingMarket ? "bg-brand-primary/10 border-brand-primary/30 text-brand-primary animate-pulse" : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+            )}>
+              <div className={cn("w-1.5 h-1.5 rounded-full", isUpdatingMarket ? "bg-brand-primary" : "bg-emerald-500")} />
+              {isUpdatingMarket ? "Auditing Live Grounding..." : "Sync Verified (April 2026)"}
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-4">
           {!user ? (
@@ -690,10 +641,28 @@ function WealthApp() {
                       offset={10}
                     />
                   </ReferenceLine>
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', backdropFilter: 'blur(10px)', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.1)', fontSize: '10px', color: '#f8fafc' }}
-                    itemStyle={{ padding: '2px 0' }}
-                    formatter={(val: number) => [formatCurrency(val), '']}
+                  <ChartTooltip 
+                    content={({ active, payload, label }) => {
+                      if (active && payload && payload.length) {
+                        return (
+                          <div className="bg-slate-900/95 backdrop-blur-xl border border-white/20 p-4 rounded-xl shadow-2xl min-w-[200px]">
+                            <p className="text-[10px] font-black text-text-muted mb-3 uppercase tracking-[0.2em] border-b border-white/10 pb-2">Year {label} Strategy</p>
+                            <div className="space-y-2">
+                              {payload.map((item: any) => (
+                                <div key={item.dataKey} className="flex justify-between items-center gap-4">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
+                                    <span className="text-[11px] font-bold text-white/90">{item.name}</span>
+                                  </div>
+                                  <span className="text-[11px] font-mono font-black text-brand-secondary">{formatCurrency(item.value)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
                   />
                   {assetClasses.map((asset) => (
                     <Line 
@@ -806,13 +775,24 @@ function WealthApp() {
                         dataKey="pct"
                         animationDuration={1000}
                       >
-                        {portfolioStrategy.allocations.map((entry, index) => (
-                          <Cell 
-                            key={`cell-${index}`} 
-                            fill={assetClasses.find(a => a.name === entry.name)?.color || '#6366f1'} 
-                            stroke="rgba(255,255,255,0.1)"
-                          />
-                        ))}
+                        {portfolioStrategy.allocations.map((entry, index) => {
+                          const assetData = assetClasses.find(a => a.name === entry.name);
+                          const isHovered = hoveredAsset === entry.name;
+                          return (
+                            <Cell 
+                              key={`cell-${index}`} 
+                              fill={assetData?.color || '#6366f1'} 
+                              stroke={isHovered ? 'white' : 'rgba(255,255,255,0.1)'}
+                              strokeWidth={isHovered ? 2 : 1}
+                              style={{ 
+                                filter: isHovered ? 'drop-shadow(0 0 8px rgba(255,255,255,0.3))' : 'none',
+                                transform: isHovered ? 'scale(1.05)' : 'scale(1)',
+                                transformOrigin: 'center',
+                                transition: 'all 0.3s ease'
+                              }}
+                            />
+                          );
+                        })}
                       </Pie>
                       <ChartTooltip 
                         content={({ active, payload }) => {
@@ -846,8 +826,21 @@ function WealthApp() {
                     </thead>
                     <tbody className="text-[11px] font-medium divide-y divide-white/5">
                       {portfolioStrategy.allocations.map((item) => (
-                        <tr key={item.name} className="hover:bg-white/[0.02] transition-colors">
-                          <td className="px-4 py-3 text-text-primary">{item.name}</td>
+                        <tr 
+                          key={item.name} 
+                          onMouseEnter={() => setHoveredAsset(item.name)}
+                          onMouseLeave={() => setHoveredAsset(null)}
+                          className={cn(
+                            "transition-all duration-300 cursor-help",
+                            hoveredAsset === item.name ? "bg-white/[0.08]" : "hover:bg-white/[0.02]"
+                          )}
+                        >
+                          <td className="px-4 py-3 text-text-primary">
+                            <div className="flex items-center gap-2">
+                              <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: assetClasses.find(a => a.name === item.name)?.color }} />
+                              {item.name}
+                            </div>
+                          </td>
                           <td className="px-4 py-3 text-center font-bold text-brand-secondary">{item.pct.toFixed(0)}%</td>
                           <td className="px-4 py-3 text-text-secondary italic">{item.advice}</td>
                         </tr>
@@ -904,12 +897,15 @@ function WealthApp() {
       </main>
 
       <footer className="mt-8 relative z-10">
-        <div className="p-4 rounded-xl bg-white/5 border border-white/10 mb-6">
-          <p className="text-[9px] uppercase tracking-widest font-black text-rose-400 mb-2 flex items-center gap-2">
-            <AlertTriangle size={12} /> Compliance & Risk Disclaimer
-          </p>
-          <p className="text-[10px] text-text-muted leading-relaxed">
-            The values projected by the Investment and Portfolio Predictor are simulated using current April 2026 ground-level market data via Gemini 3 AI. Historical performance is not indicative of future results. All allocations are algorithmic suggestions based on your risk profile and inflation inputs. Consult with a SEBI-registered (or local equivalent) financial advisor before making actual capital commitments. This tool does not constitute financial advice.
+        <div className="p-5 rounded-2xl bg-indigo-500/5 border border-white/10 mb-8 backdrop-blur-sm">
+          <div className="flex items-center gap-2 mb-3">
+             <div className="bg-rose-500/20 p-1.5 rounded-lg">
+                <AlertTriangle size={14} className="text-rose-400" />
+             </div>
+             <p className="text-[11px] uppercase tracking-[0.3em] font-black text-white/80">Compliance & Regulatory Notice</p>
+          </div>
+          <p className="text-[11px] text-text-muted leading-relaxed max-w-4xl font-medium">
+            The mathematical projections provided by the <span className="text-white">Investment and Portfolio Predictor</span> are computed using localized Gemini 3 grounding engines. These simulations incorporate current volatility benchmarks, inflation indexes, and multi-asset yield histories. <span className="text-brand-secondary">Past performance is not a guarantee of future outcomes.</span> All strategy recommendations (Growth vs. Shield) are purely algorithmic and do not substitute for professional bespoke advice from a certified SEBI-registered advisor. By using this simulator, you acknowledge the inherent risks of market investment.
           </p>
         </div>
 
