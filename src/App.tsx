@@ -421,7 +421,7 @@ function WealthApp() {
       <header className="flex justify-between items-center mb-6 relative z-10 font-sans">
         <div>
           <h1 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-            Wealth Catalyst
+            Investment and Portfolio Predictor
           </h1>
           <p className="text-text-secondary text-sm italic">Advanced Multi-Asset Projection Simulator</p>
         </div>
