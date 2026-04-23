@@ -20,7 +20,9 @@ import {
   ResponsiveContainer, 
   LineChart as ReChart,
   Line,
-  Legend
+  Legend,
+  ReferenceLine,
+  Label
 } from 'recharts';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -660,7 +662,28 @@ function WealthApp() {
                     interval="preserveStartEnd"
                     minTickGap={30}
                   />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#94a3b8' }} tickFormatter={(val) => formatCurrency(val)} />
+                  <YAxis 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{ fontSize: 9, fill: '#94a3b8' }} 
+                    tickFormatter={(val) => formatCurrency(val)} 
+                    domain={[0, (dataMax: number) => Math.max(dataMax, targetCorpus * 1.1)]}
+                  />
+                  <ReferenceLine 
+                    y={targetCorpus} 
+                    stroke="#10b981" 
+                    strokeDasharray="5 5" 
+                    strokeWidth={1}
+                  >
+                    <Label 
+                      value="Target Goal" 
+                      position="insideRight" 
+                      fill="#10b981" 
+                      fontSize={10} 
+                      fontWeight="bold"
+                      offset={10}
+                    />
+                  </ReferenceLine>
                   <Tooltip 
                     contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', backdropFilter: 'blur(10px)', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.1)', fontSize: '10px', color: '#f8fafc' }}
                     itemStyle={{ padding: '2px 0' }}
