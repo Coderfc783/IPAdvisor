@@ -213,9 +213,15 @@ function WealthApp() {
       'Government Bonds': 0
     };
 
-    // 1. PRINCIPAL PROTECTION (Bank Schemes + Government Bonds)
-    // Low risk profiles get more protection.
-    const protectionBase = Math.max(10, (10 - riskLevel) * 10);
+    // 1. PRINCIPAL PROTECTION (Bank Schemes + Government Bonds) - THE "BASE SHIELD"
+    // Deeply conservative for 1-3, Moderate for 4-6, Aggressive for 7-10
+    const protectionMap: Record<number, number> = {
+      1: 85, 2: 75, 3: 65, // Conservative
+      4: 40, 5: 35, 6: 30, // Moderate
+      7: 20, 8: 15, 9: 10, 10: 5 // Aggressive
+    };
+    const protectionBase = protectionMap[riskLevel] || 10;
+    
     allocations['Bank Schemes'] = protectionBase * 0.4;
     allocations['Government Bonds'] = protectionBase * 0.6;
 
