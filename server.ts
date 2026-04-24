@@ -1,10 +1,14 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import yahooFinance from 'yahoo-finance2';
+import YahooFinanceClass from 'yahoo-finance2';
 import dotenv from "dotenv";
 
 dotenv.config();
+
+// Resilient initialization for yahoo-finance2
+const YahooFinance = (YahooFinanceClass as any).YahooFinance || YahooFinanceClass;
+const yahooFinance = new YahooFinance();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
