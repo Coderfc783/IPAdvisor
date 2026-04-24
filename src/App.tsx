@@ -7,10 +7,7 @@ import {
   ShieldCheck,
   LineChart,
   ArrowRightLeft,
-  Bell,
-  AlertTriangle,
-  CheckCircle2,
-  X
+  AlertTriangle
 } from 'lucide-react';
 import { 
   XAxis, 
@@ -31,11 +28,6 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { motion } from 'motion/react';
-import { Type } from "@google/genai";
-import { FirebaseProvider, useFirebase } from './components/FirebaseProvider';
-import { signInWithGoogle, auth, db } from './lib/firebase';
-import { LogIn, LogOut } from 'lucide-react';
-import { doc, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -53,7 +45,6 @@ const INITIAL_ASSET_CLASSES: any[] = [];
 
 function WealthApp() {
   // Persistence Logic
-  const { user, loading: authLoading, saveUserProfile, loadUserProfile } = useFirebase();
   const [isLoaded, setIsLoaded] = useState(false);
   const [currentCorpus, setCurrentCorpus] = useState<number>(1000000);
   const [targetCorpus, setTargetCorpus] = useState<number>(5000000);
@@ -63,31 +54,15 @@ function WealthApp() {
   const [assetClasses, setAssetClasses] = useState(INITIAL_ASSET_CLASSES);
   const [isUpdatingMarket, setIsUpdatingMarket] = useState(false);
   const [hoveredAsset, setHoveredAsset] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState<{ id: string; type: 'success' | 'warning' | 'info'; message: string; timestamp: Date }[]>([]);
+  const [lastSync, setLastSync] = useState<string | null>(null);
 
-  const addAlert = (type: 'success' | 'warning' | 'info', message: string) => {
-    const id = Math.random().toString(36).substring(7);
-    setAlerts(prev => [{ id, type, message, timestamp: new Date() }, ...prev].slice(0, 5));
-  };
-
-  const removeAlert = (id: string) => {
-    setAlerts(prev => prev.filter(a => a.id !== id));
-  };
-
-  // Load from Firestore or localStorage & Trigger Initial Fetch
+  // Load from localStorage & Trigger Initial Fetch
   useEffect(() => {
-    async function initData() {
-      if (authLoading) return;
-
+    function initData() {
       let sourceData: any = null;
 
-      if (user) {
-        // Try Cloud first
-        sourceData = await loadUserProfile();
-      }
-
       const saved = localStorage.getItem('wealth_catalyst_data');
-      if (!sourceData && saved) {
+      if (saved) {
         try {
           sourceData = JSON.parse(saved);
         } catch (e) {
@@ -100,11 +75,8 @@ function WealthApp() {
         if (sourceData.targetCorpus) setTargetCorpus(sourceData.targetCorpus);
         if (sourceData.years) setYears(sourceData.years);
         if (sourceData.riskLevel) setRiskLevel(sourceData.riskLevel);
-        if (sourceData.months) setYears(Math.ceil(sourceData.months / 12));
         if (sourceData.inflationRate) setInflationRate(sourceData.inflationRate);
         if (sourceData.assetClasses) {
-          // Allow assets to persist with their last known ROI instead of resetting to 0.
-          // This prevents the "Zero ROI" flash during background refresh.
           setAssetClasses(sourceData.assetClasses);
         }
       }
@@ -114,9 +86,9 @@ function WealthApp() {
     }
 
     initData();
-  }, [user, authLoading]);
+  }, []);
 
-  // Sync to Cloud & Local
+  // Save to LocalStorage
   useEffect(() => {
     if (isLoaded) {
       const dataToSave = {
@@ -129,12 +101,8 @@ function WealthApp() {
       };
       
       localStorage.setItem('wealth_catalyst_data', JSON.stringify(dataToSave));
-      
-      if (user) {
-        saveUserProfile(dataToSave);
-      }
     }
-  }, [currentCorpus, targetCorpus, years, riskLevel, inflationRate, assetClasses, isLoaded, user]);
+  }, [currentCorpus, targetCorpus, years, riskLevel, inflationRate, assetClasses, isLoaded]);
 
   // Market Data Integration (Live Grounding via Backend API)
   async function refreshMarketData() {
@@ -157,57 +125,23 @@ function WealthApp() {
             item.name.includes("Equity") ? 0.14 :
             item.name.includes("Metals") ? 0.09 :
             item.name.includes("Estate") ? 0.10 : 
-            item.name.includes("Debt") ? 0.08 : 0.05
+            item.name.includes("Debt") ? 0.08 :
+            item.name.includes("Crypto") ? 0.45 :
+            item.name.includes("Bond") ? 0.071 :
+            item.name.includes("ETF") ? 0.15 : 0.05
           )
         }));
 
-        // Movement Alerting Logic
-        validData.forEach((newAsset: any) => {
-          const oldAsset = assetClasses.find(a => a.name === newAsset.name);
-          if (oldAsset && oldAsset.roi > 0) {
-            const diff = Math.abs(newAsset.roi - oldAsset.roi);
-            if (diff > 0.02) {
-              addAlert('warning', `Significant shift detected in ${newAsset.name} yields: ${(newAsset.roi * 100).toFixed(1)}%`);
-            }
-          }
-        });
-
         // India VIX Alerting
         const foAsset = validData.find((a: any) => a.name.includes("F&O"));
-        if (foAsset && foAsset.roi > 0.25) {
-          addAlert('warning', "High Market Volatility detected. Review Hedging strategies.");
-        }
 
         setAssetClasses(validData);
-
-        // Update Cloud Cache if signed in
-        if (user) {
-          try {
-            await setDoc(doc(db, 'market', 'latest'), {
-              assetClasses: validData,
-              fetchedAt: serverTimestamp()
-            });
-          } catch (cacheError) {
-            console.warn("Failed to update market cache:", cacheError);
-          }
-        }
+        if (json.timestamp) setLastSync(json.timestamp);
       } else {
         throw new Error("API returned malformed data");
       }
     } catch (e) {
       console.error("Advanced market sync failed:", e);
-      addAlert('info', "Using cached market data due to sync delay.");
-      
-      // Fallback: Try reading from the global cache if API fails
-      try {
-        const cacheSnap = await getDoc(doc(db, 'market', 'latest'));
-        if (cacheSnap.exists()) {
-          setAssetClasses(cacheSnap.data().assetClasses);
-          console.log("Loaded market data from cloud cache fallback.");
-        }
-      } catch (fallbackError) {
-        console.error("Cloud cache fallback also failed:", fallbackError);
-      }
     } finally {
       setIsUpdatingMarket(false);
     }
@@ -245,19 +179,6 @@ function WealthApp() {
     });
   }, [currentCorpus, targetCorpus, years, inflationRate, assetClasses]);
 
-  const combinedChartData = useMemo(() => {
-    const yearsArr = Array.from({ length: Math.ceil(years) + 1 }, (_, i) => i);
-    return yearsArr.map(yr => {
-      const dataPoint: any = { year: `Year ${yr}` };
-      results.forEach(res => {
-        dataPoint[res.name] = res.chartData[yr][res.name];
-      });
-      return dataPoint;
-    });
-  }, [results, years]);
-
-  const bestAsset = results.length > 0 ? [...results].sort((a, b) => b.finalRealValue - a.finalRealValue)[0] : null;
-
   const personalizedRecommendation = useMemo(() => {
     if (results.length === 0) return null;
     
@@ -276,19 +197,6 @@ function WealthApp() {
 
   const successRate = results.length > 0 ? (results.filter(r => r.isSuccess).length / results.length) * 100 : 0;
 
-  // Threshold Alert Logic
-  useEffect(() => {
-    if (results.length > 0) {
-      const successful = results.filter(r => r.isSuccess);
-      if (successful.length > 0) {
-        const best = successful.sort((a, b) => b.finalRealValue - a.finalRealValue)[0];
-        if (best.finalRealValue > targetCorpus * 1.5) {
-          addAlert('success', `Exceptional Target Overflow: ${best.name} projected to exceed 150% of your goal.`);
-        }
-      }
-    }
-  }, [results, targetCorpus]);
-
   const portfolioStrategy = useMemo(() => {
     if (results.length === 0) return null;
 
@@ -299,39 +207,57 @@ function WealthApp() {
       'Estates': 0,
       'F&O': 0,
       'Bank Schemes': 0,
-      'Debt Funds': 0
+      'Debt Funds': 0,
+      'ETFs': 0,
+      'Cryptocurrency': 0,
+      'Government Bonds': 0
     };
 
-    // 1. THE BASE SHIELD
-    if (riskLevel <= 5) {
-      const shield = (10 - riskLevel) * 10;
-      allocations['Bank Schemes'] = shield / 2;
-      allocations['Metals'] = shield / 2;
-    } else {
+    // 1. PRINCIPAL PROTECTION (Bank Schemes + Government Bonds)
+    // Low risk profiles get more protection.
+    const protectionBase = Math.max(10, (10 - riskLevel) * 10);
+    allocations['Bank Schemes'] = protectionBase * 0.4;
+    allocations['Government Bonds'] = protectionBase * 0.6;
+
+    // 2. METALS (Diversified Safeguard)
+    // Metals provide a separate hedge, usually 5-15%
+    if (riskLevel <= 4) {
       allocations['Metals'] = 15;
+    } else if (riskLevel <= 7) {
+      allocations['Metals'] = 10;
+    } else {
+      allocations['Metals'] = 5;
     }
 
-    // 5. STABILITY LAYER (Debt)
-    if (riskLevel >= 4 && riskLevel <= 8) {
-      allocations['Debt Funds'] = 20;
+    // 3. STABILITY LAYER (Debt)
+    if (riskLevel >= 3 && riskLevel <= 8) {
+      allocations['Debt Funds'] = 10;
     }
 
-    // 3. HEDGING (F&O) - Priority add-on
-    if (riskLevel > 7) {
+    // 4. THEMATIC GROWTH (ETFs)
+    if (riskLevel >= 4) {
+      allocations['ETFs'] = 10;
+    }
+
+    // 5. HIGH RISK SPECULATION (Crypto & F&O)
+    if (riskLevel >= 8) {
+      allocations['Cryptocurrency'] = 7;
       allocations['F&O'] = 5;
+    } else if (riskLevel >= 6) {
+      allocations['Cryptocurrency'] = 3;
     }
 
-    // 4. INFLATION OFFSET (Estates)
-    if (inflationRate > 5) {
+    // 6. INFLATION OFFSET (Estates)
+    if (inflationRate > 5 || riskLevel > 5) {
       allocations['Estates'] = 10;
     }
 
-    // 2. GROWTH ENGINE (Remaining)
+    // 7. GROWTH ENGINE (Remaining)
     const used = Object.values(allocations).reduce((a, b) => a + b, 0);
     const remaining = Math.max(0, 100 - used);
     
     if (remaining > 0) {
-      if (years > 5) {
+      if (years > 4) {
         allocations['Index Funds'] += remaining * 0.7;
         allocations['General Equity'] += remaining * 0.3;
       } else {
@@ -348,18 +274,36 @@ function WealthApp() {
       allocations: Object.entries(allocations).filter(a => a[1] > 0).map(([name, pct]) => ({
         name,
         pct,
-        advice: name === 'Metals' || name === 'Bank Schemes' ? 'Shields capital against volatility.' :
+        advice: name === 'Metals' ? 'Hedging against fiat debasement.' :
+                name === 'Bank Schemes' || name === 'Government Bonds' ? 'Principal protection & sovereign stability.' :
                 name === 'F&O' ? 'Hedges downside risk via Protective Puts.' :
                 name === 'Estates' ? 'Offsets inflation debasement.' : 
                 name === 'Debt Funds' ? 'Provides stable yields while bridging fixed-income and equity.' :
+                name === 'Cryptocurrency' ? 'Hyper-growth speculative exposure.' :
+                name === 'ETFs' ? 'Broad thematic market exposure.' :
                 'Core growth engine for corpus target.'
       })),
-      shieldPct: (allocations['Bank Schemes'] || 0) + (allocations['Metals'] || 0),
+      shieldPct: (allocations['Bank Schemes'] || 0) + (allocations['Government Bonds'] || 0),
+      metalsPct: allocations['Metals'] || 0,
       most,
       least,
       isAchievable
     };
   }, [results, riskLevel, years, inflationRate]);
+
+  const combinedChartData = useMemo(() => {
+    const yearsArr = Array.from({ length: Math.ceil(years) + 1 }, (_, i) => i);
+    return yearsArr.map(yr => {
+      const dataPoint: any = { year: `Year ${yr}` };
+      results.forEach(res => {
+        dataPoint[res.name] = res.chartData[yr][res.name];
+      });
+      return dataPoint;
+    });
+  }, [results, years]);
+
+  const bestAsset = results.length > 0 ? [...results].sort((a, b) => b.finalRealValue - a.finalRealValue)[0] : null;
+
 
   return (
     <div className="min-h-screen bg-surface-base text-text-primary p-8 relative overflow-hidden font-sans">
@@ -378,40 +322,22 @@ function WealthApp() {
               isUpdatingMarket ? "bg-brand-primary/10 border-brand-primary/30 text-brand-primary animate-pulse" : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
             )}>
               <div className={cn("w-1.5 h-1.5 rounded-full", isUpdatingMarket ? "bg-brand-primary" : "bg-emerald-500")} />
-              {isUpdatingMarket ? "Auditing Live Grounding..." : "Sync Verified (April 2026)"}
+              {isUpdatingMarket ? "Syncing Institutional Data..." : (
+                <div className="flex items-center gap-2">
+                  <span>Verified Data Feed (Real-Time)</span>
+                  {lastSync && (
+                    <span className="opacity-40 font-mono text-[8px]">
+                      Last Update: {new Date(lastSync).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
         <div className="flex items-center gap-4">
-          {!user ? (
-            <button 
-              onClick={signInWithGoogle}
-              className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-white text-xs font-bold rounded-full hover:bg-brand-primary/90 transition-all shadow-lg shadow-brand-primary/20"
-            >
-              <LogIn size={14} /> Sign In
-            </button>
-          ) : (
-            <div className="flex items-center gap-3">
-              <div className="flex flex-col items-end">
-                <span className="text-[10px] font-bold text-white uppercase tracking-wider">{user.displayName}</span>
-                <button 
-                  onClick={() => auth.signOut()}
-                  className="text-[8px] text-rose-400 font-black uppercase tracking-[0.2em] hover:text-rose-300"
-                >
-                  Disconnect
-                </button>
-              </div>
-              <img 
-                src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} 
-                alt="Profile" 
-                className="w-8 h-8 rounded-full border border-white/10"
-                referrerPolicy="no-referrer"
-              />
-            </div>
-          )}
-          
           <div className="px-4 py-2 bg-white/5 border border-white/10 rounded-full backdrop-blur-md flex items-center gap-2 text-text-secondary">
-            <span className="text-[10px] uppercase tracking-widest ">Feed: </span>
+            <span className="text-[10px] uppercase tracking-widest ">Simulator Status: </span>
             <span className="text-[10px] font-mono text-brand-secondary">ACTIVE</span>
           </div>
         </div>
@@ -426,12 +352,6 @@ function WealthApp() {
                 Configuration
               </h2>
               <div className="flex gap-2">
-                {alerts.length > 0 && (
-                   <div className="flex items-center gap-1.5 px-2 py-1 bg-brand-primary/10 rounded-lg text-brand-primary animate-pulse">
-                     <Bell size={12} />
-                     <span className="text-[10px] font-bold">{alerts.length}</span>
-                   </div>
-                )}
                 <button 
                   onClick={refreshMarketData}
                   disabled={isUpdatingMarket}
@@ -522,9 +442,7 @@ function WealthApp() {
               <div className="p-3 rounded-xl bg-indigo-500/5 border border-indigo-500/20">
                 <p className="text-[9px] uppercase tracking-widest font-black text-brand-primary mb-1">Data Sovereignty</p>
                 <p className="text-[10px] text-indigo-100/60 leading-tight">
-                  {user 
-                    ? "Secured on Cloud Firestore via gen-lang project in asia-southeast1." 
-                    : "Browsing in Guest Mode. Local persistence active."}
+                  Local persistence active. All calculations are transient to this browser.
                 </p>
               </div>
             </div>
@@ -554,49 +472,6 @@ function WealthApp() {
               }
             </div>
           </div>
-
-          {/* Alert Terminal */}
-          {alerts.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <p className="text-[9px] uppercase tracking-widest text-text-muted font-black px-2 mb-1 flex items-center gap-2">
-                 <Bell size={10} /> Intelligence Alerts
-              </p>
-              {alerts.map(alert => (
-                <motion.div 
-                  key={alert.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className={cn(
-                    "p-3 rounded-xl border flex gap-3 items-start relative group",
-                    alert.type === 'success' ? "bg-emerald-500/5 border-emerald-500/20" :
-                    alert.type === 'warning' ? "bg-amber-500/5 border-amber-500/20" :
-                    "bg-blue-500/5 border-blue-500/20"
-                  )}
-                >
-                  <div className={cn(
-                    "mt-0.5",
-                    alert.type === 'success' ? "text-emerald-400" :
-                    alert.type === 'warning' ? "text-amber-400" :
-                    "text-blue-400"
-                  )}>
-                    {alert.type === 'success' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-[11px] leading-tight text-white/90 pr-4">{alert.message}</p>
-                    <p className="text-[8px] text-text-muted font-mono mt-1 uppercase">
-                      {alert.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </p>
-                  </div>
-                  <button 
-                    onClick={() => removeAlert(alert.id)}
-                    className="absolute top-2 right-2 p-1 text-text-muted hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X size={10} />
-                  </button>
-                </motion.div>
-              ))}
-            </div>
-          )}
         </aside>
 
         <div className="col-span-12 lg:col-span-8 flex flex-col gap-6">
@@ -644,19 +519,35 @@ function WealthApp() {
                   <ChartTooltip 
                     content={({ active, payload, label }) => {
                       if (active && payload && payload.length) {
+                        const sortedPayload = [...payload].sort((a, b) => (b.value as number) - (a.value as number));
                         return (
-                          <div className="bg-slate-900/95 backdrop-blur-xl border border-white/20 p-4 rounded-xl shadow-2xl min-w-[200px]">
-                            <p className="text-[10px] font-black text-text-muted mb-3 uppercase tracking-[0.2em] border-b border-white/10 pb-2">Year {label} Strategy</p>
-                            <div className="space-y-2">
-                              {payload.map((item: any) => (
-                                <div key={item.dataKey} className="flex justify-between items-center gap-4">
+                          <div className="bg-slate-900/95 backdrop-blur-xl border border-white/20 p-4 rounded-xl shadow-2xl min-w-[320px]">
+                            <div className="flex justify-between items-center border-b border-white/10 pb-2 mb-3">
+                              <p className="text-[10px] font-black text-text-muted uppercase tracking-[0.2em]">{label} Projections</p>
+                            </div>
+                            <div className="space-y-1.5">
+                              {sortedPayload.map((item: any) => (
+                                <div 
+                                  key={item.dataKey} 
+                                  className="flex justify-between items-center gap-4 py-0.5"
+                                >
                                   <div className="flex items-center gap-2">
-                                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
-                                    <span className="text-[11px] font-bold text-white/90">{item.name}</span>
+                                    <div 
+                                      className="w-2.5 h-2.5 rounded-full" 
+                                      style={{ backgroundColor: item.color }} 
+                                    />
+                                    <span className="text-[11px] font-bold text-white/90">
+                                      {item.name}
+                                    </span>
                                   </div>
-                                  <span className="text-[11px] font-mono font-black text-brand-secondary">{formatCurrency(item.value)}</span>
+                                  <span className="text-[11px] font-mono font-black text-brand-secondary">
+                                    {formatCurrency(item.value)}
+                                  </span>
                                 </div>
                               ))}
+                            </div>
+                            <div className="mt-4 pt-2 border-t border-white/10">
+                               <p className="text-[8px] text-text-muted italic opacity-60">Projections based on current institutional data feed.</p>
                             </div>
                           </div>
                         );
@@ -671,8 +562,9 @@ function WealthApp() {
                       dataKey={asset.name} 
                       stroke={asset.color} 
                       strokeWidth={2.5}
+                      opacity={1}
                       dot={false}
-                      activeDot={{ r: 4, strokeWidth: 0 }}
+                      activeDot={{ r: 5, strokeWidth: 0 }}
                       animationDuration={1500}
                     />
                   ))}
@@ -761,67 +653,78 @@ function WealthApp() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="h-[200px] flex flex-col items-center justify-center relative">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={portfolioStrategy.allocations}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={80}
-                        paddingAngle={5}
-                        dataKey="pct"
-                        animationDuration={1000}
-                      >
-                        {portfolioStrategy.allocations.map((entry, index) => {
-                          const assetData = assetClasses.find(a => a.name === entry.name);
-                          const isHovered = hoveredAsset === entry.name;
-                          return (
-                            <Cell 
-                              key={`cell-${index}`} 
-                              fill={assetData?.color || '#6366f1'} 
-                              stroke={isHovered ? 'white' : 'rgba(255,255,255,0.1)'}
-                              strokeWidth={isHovered ? 2 : 1}
-                              style={{ 
-                                filter: isHovered ? 'drop-shadow(0 0 8px rgba(255,255,255,0.3))' : 'none',
-                                transform: isHovered ? 'scale(1.05)' : 'scale(1)',
-                                transformOrigin: 'center',
-                                transition: 'all 0.3s ease'
-                              }}
-                            />
-                          );
-                        })}
-                      </Pie>
-                      <ChartTooltip 
-                        content={({ active, payload }) => {
-                          if (active && payload && payload.length) {
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="flex flex-col gap-4">
+                  <div className="h-[200px] flex flex-col items-center justify-center relative bg-white/[0.02] rounded-2xl border border-white/5">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={portfolioStrategy.allocations}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={80}
+                          paddingAngle={5}
+                          dataKey="pct"
+                          animationDuration={1000}
+                        >
+                          {portfolioStrategy.allocations.map((entry, index) => {
+                            const assetData = assetClasses.find(a => a.name === entry.name);
+                            const isHovered = hoveredAsset === entry.name;
                             return (
-                              <div className="bg-slate-900/90 backdrop-blur-md border border-white/10 px-3 py-2 rounded-lg shadow-xl text-[10px]">
-                                <p className="font-bold text-white mb-1 uppercase tracking-widest">{payload[0].name}</p>
-                                <p className="text-brand-secondary font-mono">{payload[0].value}% Allocation</p>
-                              </div>
+                              <Cell 
+                                key={`cell-${index}`} 
+                                fill={assetData?.color || '#6366f1'} 
+                                stroke={isHovered ? 'white' : 'rgba(255,255,255,0.1)'}
+                                strokeWidth={isHovered ? 2 : 1}
+                                style={{ 
+                                  filter: isHovered ? 'drop-shadow(0 0 8px rgba(255,255,255,0.3))' : 'none',
+                                  transform: isHovered ? 'scale(1.05)' : 'scale(1)',
+                                  transformOrigin: 'center',
+                                  transition: 'all 0.3s ease'
+                                }}
+                              />
                             );
-                          }
-                          return null;
-                        }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                    <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Hybrid</span>
-                    <span className="text-sm font-black text-white">Target</span>
+                          })}
+                        </Pie>
+                        <ChartTooltip 
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length) {
+                              return (
+                                <div className="bg-slate-900/90 backdrop-blur-md border border-white/10 px-3 py-2 rounded-lg shadow-xl text-[10px]">
+                                  <p className="font-bold text-white mb-1 uppercase tracking-widest">{payload[0].name}</p>
+                                  <p className="text-brand-secondary font-mono">{payload[0].value.toFixed(1)}% Allocation</p>
+                                </div>
+                              );
+                            }
+                            return null;
+                          }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                      <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Hybrid</span>
+                      <span className="text-sm font-black text-white">Target</span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-brand-primary/5 border border-brand-primary/20">
+                    <p className="text-[10px] font-black uppercase text-brand-primary mb-2 flex items-center gap-1">
+                      <ShieldCheck size={12} /> Principal Protection
+                    </p>
+                    <p className="text-[11px] text-text-secondary leading-relaxed">
+                      Your {portfolioStrategy.shieldPct}% protection in <span className="text-white font-bold">Bank Schemes & Govt Bonds</span> ensures safe capital floors. <span className="text-white font-bold">Metals ({portfolioStrategy.metalsPct}%)</span> further secures your {formatCurrency(currentCorpus)} base against global market drawdowns.
+                    </p>
                   </div>
                 </div>
 
-                <div className="overflow-hidden border border-white/5 rounded-xl bg-white/[0.02] md:col-span-1">
-                   <table className="w-full text-left">
+                <div className="lg:col-span-2 overflow-hidden border border-white/5 rounded-2xl bg-white/[0.03] backdrop-blur-sm self-start shadow-inner">
+                   <table className="w-full text-left table-fixed">
                     <thead>
-                      <tr className="bg-white/5 text-[9px] text-text-secondary uppercase tracking-widest font-bold">
-                        <th className="px-4 py-3">Asset</th>
-                        <th className="px-4 py-3 text-center">Alloc %</th>
-                        <th className="px-4 py-3">Strategy Advice</th>
+                      <tr className="bg-white/10 text-[9px] text-text-primary uppercase tracking-[0.2em] font-bold">
+                        <th className="px-5 py-4 w-1/3">Projected Asset</th>
+                        <th className="px-5 py-4 text-center w-1/4">Allocation</th>
+                        <th className="px-5 py-4">Strategic Logic</th>
                       </tr>
                     </thead>
                     <tbody className="text-[11px] font-medium divide-y divide-white/5">
@@ -835,60 +738,58 @@ function WealthApp() {
                             hoveredAsset === item.name ? "bg-white/[0.08]" : "hover:bg-white/[0.02]"
                           )}
                         >
-                          <td className="px-4 py-3 text-text-primary">
+                          <td className="px-5 py-4 text-text-primary">
                             <div className="flex items-center gap-2">
-                              <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: assetClasses.find(a => a.name === item.name)?.color }} />
-                              {item.name}
+                              <div className="w-2 h-2 rounded-full shadow-[0_0_8px_currentColor]" style={{ backgroundColor: assetClasses.find(a => a.name === item.name)?.color }} />
+                              <span className="font-bold">{item.name}</span>
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-center font-bold text-brand-secondary">{item.pct.toFixed(0)}%</td>
-                          <td className="px-4 py-3 text-text-secondary italic">{item.advice}</td>
+                          <td className="px-5 py-4 text-center">
+                            <span className="px-3 py-1 rounded-full bg-white/5 font-black text-brand-secondary border border-white/5">
+                              {item.pct.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-text-secondary italic leading-normal">
+                             {item.advice}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                  
+                  <div className="p-4 bg-white/5 border-t border-white/5 grid grid-cols-2 gap-4">
+                     <div className="flex flex-col gap-1">
+                        <p className="text-[9px] uppercase font-bold text-text-muted">Primary Alpha Generator</p>
+                        <p className="text-sm font-black text-brand-secondary truncate">{portfolioStrategy.most[0]}</p>
+                     </div>
+                     <div className="flex flex-col gap-1">
+                        <p className="text-[9px] uppercase font-bold text-text-muted">Stability Anchor</p>
+                        <p className="text-sm font-black text-rose-400 truncate">{portfolioStrategy.least[0]}</p>
+                     </div>
+                  </div>
                 </div>
+              </div>
 
-                <div className="space-y-4">
-                  <div className="p-4 rounded-xl bg-brand-primary/5 border border-brand-primary/20">
-                    <p className="text-[10px] font-black uppercase text-brand-primary mb-2 flex items-center gap-1">
-                      <ShieldCheck size={12} /> Principal Protection (Base Shield)
-                    </p>
-                    <p className="text-xs text-text-secondary leading-relaxed">
-                      Your {portfolioStrategy.shieldPct}% shield in <span className="text-white font-bold">Bank Schemes & Metals</span> acts as a financial buffer. This allocation is mathematically designed to prevent erosion of your starting <span className="text-white font-bold">{formatCurrency(currentCorpus)}</span> by prioritizing liquidity and non-correlated assets, ensuring you survive market drawdowns.
-                    </p>
+              <div className={cn(
+                "p-4 rounded-xl border flex items-center gap-4 transition-all duration-700",
+                portfolioStrategy.isAchievable ? "bg-emerald-500/10 border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.05)]" : "bg-amber-500/10 border-amber-500/30 shadow-[0_0_15px_rgba(245,158,11,0.05)]"
+              )}>
+                <div className={cn(
+                  "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 rotate-3 transition-transform hover:rotate-0",
+                  portfolioStrategy.isAchievable ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"
+                )}>
+                  {portfolioStrategy.isAchievable ? <ShieldCheck size={24} /> : <Calculator size={24} />}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-[10px] uppercase font-black tracking-widest text-white/50">Feasibility Audit</p>
+                    <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", portfolioStrategy.isAchievable ? "bg-emerald-500" : "bg-amber-500")} />
                   </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                     <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                        <p className="text-[9px] uppercase font-bold text-text-secondary mb-1">Invest MOST In</p>
-                        <p className="text-sm font-black text-brand-secondary">{portfolioStrategy.most[0]}</p>
-                     </div>
-                     <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                        <p className="text-[9px] uppercase font-bold text-text-secondary mb-1">Invest LEAST In</p>
-                        <p className="text-sm font-black text-rose-400">{portfolioStrategy.least[0]}</p>
-                     </div>
-                  </div>
-
-                  <div className={cn(
-                    "p-4 rounded-xl border flex items-center gap-3",
-                    portfolioStrategy.isAchievable ? "bg-emerald-500/10 border-emerald-500/30" : "bg-amber-500/10 border-amber-500/30"
-                  )}>
-                    <div className={cn(
-                      "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
-                      portfolioStrategy.isAchievable ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"
-                    )}>
-                      {portfolioStrategy.isAchievable ? <ShieldCheck size={20} /> : <Calculator size={20} />}
-                    </div>
-                    <div>
-                      <p className="text-[10px] uppercase font-black tracking-widest mb-0.5">Real-World Check</p>
-                      <p className="text-[11px] font-medium leading-normal">
-                        {portfolioStrategy.isAchievable 
-                          ? `With a ${years}-year horizon and current inflation of ${inflationRate}%, reaching ${formatCurrency(targetCorpus)} is realistic within this hybrid framework.`
-                          : `Warning: Your target corpus appears aggressive for a ${years}-year timeframe. Consider extending the horizon or adjusting the risk appetite.`}
-                      </p>
-                    </div>
-                  </div>
+                  <p className="text-xs font-semibold leading-relaxed text-indigo-50/90">
+                    {portfolioStrategy.isAchievable 
+                      ? `Target confirmed. With a ${years}-year runway and ${inflationRate}% inflation, this allocation is mathematically stable for reaching ${formatCurrency(targetCorpus)}.`
+                      : `Warning: ${formatCurrency(targetCorpus)} exceeds the standard probability curve for ${years} years. Strategy suggests shifting to high-growth ETFs or increasing duration.`}
+                  </p>
                 </div>
               </div>
             </motion.section>
@@ -905,19 +806,19 @@ function WealthApp() {
              <p className="text-[11px] uppercase tracking-[0.3em] font-black text-white/80">Compliance & Regulatory Notice</p>
           </div>
           <p className="text-[11px] text-text-muted leading-relaxed max-w-4xl font-medium">
-            The mathematical projections provided by the <span className="text-white">Investment and Portfolio Predictor</span> are computed using localized Gemini 3 grounding engines. These simulations incorporate current volatility benchmarks, inflation indexes, and multi-asset yield histories. <span className="text-brand-secondary">Past performance is not a guarantee of future outcomes.</span> All strategy recommendations (Growth vs. Shield) are purely algorithmic and do not substitute for professional bespoke advice from a certified SEBI-registered advisor. By using this simulator, you acknowledge the inherent risks of market investment.
+            The mathematical projections provided by the <span className="text-white">Investment and Portfolio Predictor</span> are computed using real-time data feeds from Yahoo Finance and AMFI. These simulations incorporate current volatility benchmarks, inflation indexes, and multi-asset yield histories. <span className="text-brand-secondary">Past performance is not a guarantee of future outcomes.</span> All strategy recommendations (Growth vs. Shield) are purely algorithmic and do not substitute for professional bespoke advice from a certified SEBI-registered advisor. By using this simulator, you acknowledge the inherent risks of market investment.
           </p>
         </div>
 
         <div className="flex justify-between items-center text-[10px] text-text-muted uppercase tracking-[0.2em]">
           <p>© 2024 Quantum Finance Simulations</p>
           <div className="flex gap-4 items-center">
-            <div className="flex items-center gap-1 text-brand-secondary">
+            <div className="flex items-center gap-1 text-text-muted opacity-60">
                <ShieldCheck size={12} />
-               <span>{user ? 'Cloud Sync Active' : 'Local Persistence Only'}</span>
+               <span>Local Persistence Only</span>
             </div>
             <p className="opacity-40">|</p>
-            <p>Infrastructure: Enterprise Cloud Container</p>
+            <p>Infrastructure: Dedicated Simulator Instance</p>
           </div>
         </div>
       </footer>
@@ -927,9 +828,7 @@ function WealthApp() {
 
 export default function App() {
   return (
-    <FirebaseProvider>
-      <WealthApp />
-    </FirebaseProvider>
+    <WealthApp />
   );
 }
 
